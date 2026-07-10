@@ -119,8 +119,8 @@ Cara paling umum dan paling efisien — tunggu hingga ada pembayaran dengan nomi
 ```js
 import { getGoPayWatcher } from './gobiz.js';
 
-// Atur seberapa sering API di-poll (default: 7000ms = 7 detik)
-const watcher = getGoPayWatcher(7_000);
+// Atur seberapa sering API di-poll (default: 6000ms = 6 detik)
+const watcher = getGoPayWatcher(6_000);
 
 try {
   const tx = await watcher.waitForPayment(50000, {
@@ -141,7 +141,7 @@ try {
 
 | Parameter    | Tipe     | Default | Keterangan                                         |
 |--------------|----------|---------|----------------------------------------------------|
-| `intervalMs` | `number` | `7000`  | Seberapa sering API di-poll (milidetik). Nilai terlalu kecil berisiko rate-limit. Disarankan ≥ 7000 ms |
+| `intervalMs` | `number` | `6000`  | Seberapa sering API di-poll (milidetik). Nilai terlalu kecil berisiko rate-limit. Disarankan ≥ 5000 ms |
 
 **Parameter `waitForPayment`:**
 
@@ -273,20 +273,17 @@ watcher.reset();
 
 Repo ini menyertakan `demo.js` — script siap pakai yang mendemonstrasikan alur pembayaran QRIS lengkap dari awal hingga selesai:
 
-```
-🔐 Auth ke GoBiz
-    ↓
-⚙️  Generate QRIS dinamis (sisipkan nominal + hitung ulang CRC16)
-    ↓
-🖼️  Render gambar QR Code
-    ↓
-☁️  Upload gambar → dapat URL
-    ↓
-📲  Tampilkan URL (kirim ke pengguna untuk di-scan)
-    ↓
-⏳  Tunggu pembayaran masuk via GoPayWatcher
-    ↓
-✅  Konfirmasi sukses → program selesai
+```mermaid
+flowchart TD
+    A([🔐 Auth ke GoBiz]) --> B[⚙️ Generate QRIS Dinamis\nSisipkan nominal + hitung ulang CRC16]
+    B --> C[🖼️ Render gambar QR Code]
+    C --> D[☁️ Upload gambar → dapat URL]
+    D --> E[📲 Tampilkan URL ke pengguna\nuntuk di-scan]
+    E --> F[⏳ Polling via GoPayWatcher\nTunggu pembayaran masuk]
+    F --> G([✅ Konfirmasi sukses\nProgram selesai])
+
+    style A fill:#1a1a2e,stroke:#4ade80,color:#fff
+    style G fill:#1a1a2e,stroke:#4ade80,color:#fff
 ```
 
 **Cara menjalankan:**
@@ -327,7 +324,7 @@ Kelas pemantau pembayaran berbasis `EventEmitter`.
 
 | Method                          | Keterangan                                                          |
 |---------------------------------|---------------------------------------------------------------------|
-| `constructor(merchant, intervalMs?)` | `merchant` adalah instance `GoPayMerchant`, `intervalMs` default `7000` ms |
+| `constructor(merchant, intervalMs?)` | `merchant` adalah instance `GoPayMerchant`, `intervalMs` default `6000` ms |
 | `waitForPayment(amount, opts?)`  | Tunggu pembayaran nominal tertentu, returns `Promise`               |
 | `on('payment', callback)`        | Dengarkan event pembayaran masuk                                    |
 | `reset()`                        | Reset seed (hapus semua ID transaksi yang diingat)                  |
@@ -356,7 +353,7 @@ const watcher = getGoPayWatcher(10_000); // polling tiap 10 detik
 
 | Parameter    | Tipe     | Default | Keterangan                                              |
 |--------------|----------|---------|---------------------------------------------------------|
-| `intervalMs` | `number` | `7000`  | Interval polling dalam milidetik. Disarankan ≥ 7000 ms |
+| `intervalMs` | `number` | `6000`  | Interval polling dalam milidetik. Disarankan ≥ 5000 ms |
 
 > **Catatan:** `intervalMs` hanya berlaku saat instance pertama kali dibuat. Pemanggilan `getGoPayWatcher()` berikutnya akan mengabaikan parameter ini karena instance sudah ada (singleton).
 
@@ -407,8 +404,8 @@ flowchart TD
 
 <a href="https://www.star-history.com/?repos=kavionn%2Fgobiz-payment&type=date&logscale=&legend=bottom-right">
  <picture>
-   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=kavionn/gobiz-payment&type=date&theme=dark&logscale&legend=bottom-right" />
-   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=kavionn/gobiz-payment&type=date&logscale&legend=bottom-right" />
-   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=kavionn/gobiz-payment&type=date&logscale&legend=bottom-right" />
+   <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/chart?repos=kavionn/gobiz-payment&type=date&theme=dark&logscale&legend=bottom-right&sealed_token=NLVeYDLkZicJIz0wCq8B0AusFuiDv51SJ5pBAcCcTGltyc0mwBCdRj9ATnd1pfl0v7bPLiFkkrhmsMOaah8r6_RWxnXWgUmhd1CBgsXEG8WEpqu84NzQbg" />
+   <source media="(prefers-color-scheme: light)" srcset="https://api.star-history.com/chart?repos=kavionn/gobiz-payment&type=date&logscale&legend=bottom-right&sealed_token=NLVeYDLkZicJIz0wCq8B0AusFuiDv51SJ5pBAcCcTGltyc0mwBCdRj9ATnd1pfl0v7bPLiFkkrhmsMOaah8r6_RWxnXWgUmhd1CBgsXEG8WEpqu84NzQbg" />
+   <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=kavionn/gobiz-payment&type=date&logscale&legend=bottom-right&sealed_token=NLVeYDLkZicJIz0wCq8B0AusFuiDv51SJ5pBAcCcTGltyc0mwBCdRj9ATnd1pfl0v7bPLiFkkrhmsMOaah8r6_RWxnXWgUmhd1CBgsXEG8WEpqu84NzQbg" />
  </picture>
 </a>

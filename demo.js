@@ -106,7 +106,7 @@ async function main() {
    const TIMEOUT_MS = 10 * 60_000;
    console.log(`\nMenunggu pembayaran (timeout: ${TIMEOUT_MS / 60000} menit)...\n`);
 
-   const watcher = new GoPayWatcher(merchant, 7_000);
+   const watcher = new GoPayWatcher(merchant, 6_000);
 
    try {
       const tx = await watcher.waitForPayment(AMOUNT, {

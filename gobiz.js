@@ -493,7 +493,7 @@ export default class GoPayMerchant {
 }
 
 export class GoPayWatcher extends EventEmitter {
-   constructor(merchant, intervalMs = 7_000) {
+   constructor(merchant, intervalMs = 6_000) {
       super();
       this._merchant  = merchant;
       this._interval  = intervalMs;
@@ -616,10 +616,10 @@ let _sharedWatcher  = null;
 /**
  * Dapatkan instance GoPayWatcher singleton.
  * Semua plugin yang memanggil fungsi ini berbagi satu poller yang sama.
- * @param {number} [intervalMs=7000] - Interval polling (ms)
+ * @param {number} [intervalMs=6000] - Interval polling (ms)
  * @returns {GoPayWatcher}
  */
-export function getGoPayWatcher(intervalMs = 7_000) {
+export function getGoPayWatcher(intervalMs = 6_000) {
    if (!_sharedMerchant) _sharedMerchant = new GoPayMerchant();
    if (!_sharedWatcher)  _sharedWatcher  = new GoPayWatcher(_sharedMerchant, intervalMs);
    return _sharedWatcher;
