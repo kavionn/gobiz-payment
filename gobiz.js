@@ -5,6 +5,7 @@ import { EventEmitter } from "node:events";
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import readline from "node:readline";
 
 const BASE_URL = 'https://api.gobiz.co.id';
 const CLIENT_ID = 'go-biz-web-new';
@@ -147,6 +148,111 @@ async function loginWithPassword(email, password) {
    };
 }
 
+/**
+ * Login via nomor HP dan OTP (SMS).
+ * @param {string} phoneNumber   - Nomor HP format 08xxxxxxxx atau +628xxxxxxxx
+ * @param {Function} getOtpFn    - Async callback yang mengembalikan string kode OTP.
+ *                                  Jika null, akan meminta input dari terminal (readline).
+ * @returns {{ access_token, refresh_token, expires_in }}
+ */
+async function loginWithOtp(phoneNumber, getOtpFn = null) {
+   const uniqueId = generateUUID();
+   const headers  = getAuthHeaders(uniqueId);
+
+   // Normalisasi nomor HP: strip semua prefix, kirim digit murni + country_code terpisah
+   // Contoh: 08123456789 → "8123456789" + country_code: "62"
+   let normalizedPhone = phoneNumber.trim().replace(/\D/g, '');
+   if (normalizedPhone.startsWith('62')) {
+      normalizedPhone = normalizedPhone.slice(2); // 628xxx → 8xxx
+   } else if (normalizedPhone.startsWith('0')) {
+      normalizedPhone = normalizedPhone.slice(1); // 08xxx → 8xxx
+   }
+
+   console.log(`[Auth] Mengirim OTP ke nomor: +62${normalizedPhone}`);
+
+   // Step 1: Request OTP
+   const curlArgsRequest = ['-4', '-s', '-X', 'POST', `${BASE_URL}/goid/login/request`];
+   Object.entries(headers).forEach(([k, v]) => curlArgsRequest.push('-H', `${k}: ${v}`));
+   curlArgsRequest.push('--data-raw', JSON.stringify({
+      client_id: CLIENT_ID,
+      phone_number: normalizedPhone,
+      country_code: '62',
+      login_type: 'otp'
+   }));
+
+   let outputRequest;
+   try {
+      outputRequest = execFileSync('curl', curlArgsRequest, { encoding: 'utf-8' });
+   } catch (e) {
+      throw new Error(`Curl request OTP gagal: ${e.message}`);
+   }
+
+   const reqData = JSON.parse(outputRequest);
+   if (reqData.errors?.length > 0) {
+      throw new Error(`Request OTP gagal: ${reqData.errors[0].message}`);
+   }
+
+   // Ekstrak otp_token dari response (dibutuhkan saat verifikasi)
+   const responseData = reqData.data || reqData;
+   const otpToken = responseData.otp_token || responseData.token || null;
+
+   console.log('[Auth] OTP telah dikirim. Menunggu kode OTP...');
+
+   // Step 2: Dapatkan kode OTP
+   let otpCode;
+   if (typeof getOtpFn === 'function') {
+      otpCode = await getOtpFn(normalizedPhone);
+   } else {
+      // Fallback: baca dari terminal via readline
+      otpCode = await new Promise((resolve) => {
+         const rl = readline.createInterface({
+            input: process.stdin,
+            output: process.stdout
+         });
+         rl.question(`[Auth] Masukkan kode OTP untuk ${normalizedPhone}: `, (answer) => {
+            rl.close();
+            resolve(answer.trim());
+         });
+      });
+   }
+
+   if (!otpCode) {
+      throw new Error('[Auth] Kode OTP tidak boleh kosong.');
+   }
+
+   console.log('[Auth] Memvalidasi kode OTP...');
+
+   // Step 3: Tukar OTP dengan access token
+   const curlArgsToken = ['-4', '-s', '-X', 'POST', `${BASE_URL}/goid/token`];
+   Object.entries(headers).forEach(([k, v]) => curlArgsToken.push('-H', `${k}: ${v}`));
+   curlArgsToken.push('--data-raw', JSON.stringify({
+      client_id: CLIENT_ID,
+      grant_type: 'otp',
+      data: {
+         otp: otpCode,
+         ...(otpToken ? { otp_token: otpToken } : { phone_number: normalizedPhone })
+      }
+   }));
+
+   let outputToken;
+   try {
+      outputToken = execFileSync('curl', curlArgsToken, { encoding: 'utf-8' });
+   } catch (e) {
+      throw new Error(`Curl validasi OTP gagal: ${e.message}`);
+   }
+
+   const tokenData = JSON.parse(outputToken);
+   if (tokenData.errors?.length > 0) {
+      throw new Error(`Login OTP gagal: ${tokenData.errors[0].message || 'Kode OTP salah atau sudah kadaluarsa'}`);
+   }
+
+   return {
+      access_token: tokenData.access_token,
+      refresh_token: tokenData.refresh_token,
+      expires_in: tokenData.expires_in
+   };
+}
+
 async function getUserMerchants(accessToken) {
    const uniqueId = generateUUID();
    console.log('[Auth] Mengambil daftar merchant...');
@@ -166,9 +272,20 @@ async function getUserMerchants(accessToken) {
 }
 
 export default class GoPayMerchant {
+   /**
+    * @param {object}   [options]
+    * @param {string}   [options.token]        - Access token manual (opsional)
+    * @param {string}   [options.merchantId]   - Merchant ID manual (opsional)
+    * @param {string}   [options.loginMethod]  - 'password' | 'otp' (default: auto-detect dari .env)
+    * @param {string}   [options.phone]        - Nomor HP untuk login OTP (override GOPAY_PHONE di .env)
+    * @param {Function} [options.otpCallback]  - Async fn(phoneNumber) => otpCode (opsional, default: readline terminal)
+    */
    constructor(options = {}) {
-      this.token = options.token || null;
-      this.merchantId = options.merchantId || null;
+      this.token        = options.token        || null;
+      this.merchantId   = options.merchantId   || null;
+      this.loginMethod  = options.loginMethod  || null;  // null = auto-detect
+      this.phone        = options.phone        || null;
+      this.otpCallback  = options.otpCallback  || null;
       this._initialized = false;
    }
 
@@ -188,16 +305,36 @@ export default class GoPayMerchant {
 
    async _doLogin() {
       const env = loadEnv();
-      const email    = env.GOPAY_EMAIL;
-      const password = env.GOPAY_PASSWORD;
 
-      if (!email || !password) {
-         throw new Error('[GoPayMerchant] GOPAY_EMAIL/GOPAY_PASSWORD belum diisi di file .env');
+      // Tentukan metode login: opsi constructor → .env → auto-detect
+      const method = this.loginMethod
+         || env.GOPAY_LOGIN_METHOD
+         || (env.GOPAY_PHONE ? 'otp' : 'password');
+
+      if (method === 'otp') {
+         // ── Login via Nomor HP + OTP ──────────────────────────────────
+         const phone = this.phone || env.GOPAY_PHONE;
+         if (!phone) {
+            throw new Error('[GoPayMerchant] Nomor HP belum diisi. Set GOPAY_PHONE di .env atau opsi phone di constructor.');
+         }
+
+         console.log(`[GoPayMerchant] Login OTP untuk nomor: ${phone}`);
+         const authData = await loginWithOtp(phone, this.otpCallback || null);
+         this.token = authData.access_token;
+
+      } else {
+         // ── Login via Email + Password ────────────────────────────────
+         const email    = env.GOPAY_EMAIL;
+         const password = env.GOPAY_PASSWORD;
+
+         if (!email || !password) {
+            throw new Error('[GoPayMerchant] GOPAY_EMAIL/GOPAY_PASSWORD belum diisi di file .env');
+         }
+
+         console.log(`[GoPayMerchant] Login otomatis sebagai: ${email}`);
+         const authData = await loginWithPassword(email, password);
+         this.token = authData.access_token;
       }
-
-      console.log(`[GoPayMerchant] Login otomatis sebagai: ${email}`);
-      const authData = await loginWithPassword(email, password);
-      this.token = authData.access_token;
 
       const cache = readCache();
       cache.gopay_token = this.token;
@@ -627,22 +764,62 @@ export function getGoPayWatcher(intervalMs = 6_000) {
 
 /*
 ═══════════════════════════════════════════════════════════
-CARA PENGGUNAAN — gopay.js
+CARA PENGGUNAAN — gobiz.js
 ═══════════════════════════════════════════════════════════
 
-Buat file .env di direktori yang sama dengan gopay.js:
+Buat file .env di direktori yang sama dengan gobiz.js.
+Tersedia dua metode login:
 
+  [A] Login via Nomor HP + OTP (direkomendasikan)
+  ──────────────────────────────────────────────
+  GOPAY_PHONE=08123456789
+  GOPAY_LOGIN_METHOD=otp
+
+  [B] Login via Email + Password (metode lama)
+  ──────────────────────────────────────────────
   GOPAY_EMAIL=email@merchant.com
   GOPAY_PASSWORD=password_kamu
+
+  (Jika GOPAY_PHONE ada di .env, OTP dipilih otomatis.)
 
 File .gopay_cache.json akan dibuat otomatis untuk menyimpan
 token dan merchant ID agar tidak perlu login ulang setiap saat.
 
 ───────────────────────────────────────────────────────────
-1. MENUNGGU PEMBAYARAN MASUK
+1. LOGIN VIA NOMOR HP + OTP (terminal interaktif)
 ───────────────────────────────────────────────────────────
 
-  import { getGoPayWatcher } from './gopay.js';
+  # Di file .env:
+  # GOPAY_PHONE=08123456789
+
+  import GoPayMerchant from './gobiz.js';
+
+  const merchant = new GoPayMerchant();
+  await merchant.init();
+  // → GoBiz akan kirim SMS OTP, lalu terminal meminta input kode OTP
+
+───────────────────────────────────────────────────────────
+2. LOGIN OTP DENGAN CALLBACK (untuk bot / headless server)
+───────────────────────────────────────────────────────────
+
+  import GoPayMerchant from './gobiz.js';
+
+  const merchant = new GoPayMerchant({
+    loginMethod: 'otp',
+    phone: '08123456789',
+    otpCallback: async (phoneNumber) => {
+      // Contoh: ambil OTP dari Telegram bot, webhook, dsb.
+      return await myGetOtpFromExternalSource(phoneNumber);
+    }
+  });
+
+  await merchant.init();
+
+───────────────────────────────────────────────────────────
+3. MENUNGGU PEMBAYARAN MASUK
+───────────────────────────────────────────────────────────
+
+  import { getGoPayWatcher } from './gobiz.js';
 
   const watcher = getGoPayWatcher();
 
@@ -660,10 +837,10 @@ token dan merchant ID agar tidak perlu login ulang setiap saat.
   //   tolerance  {number} — toleransi selisih nominal dalam Rupiah (default: 0)
 
 ───────────────────────────────────────────────────────────
-2. MENGAMBIL RIWAYAT TRANSAKSI
+4. MENGAMBIL RIWAYAT TRANSAKSI
 ───────────────────────────────────────────────────────────
 
-  import GoPayMerchant from './gopay.js';
+  import GoPayMerchant from './gobiz.js';
 
   const merchant = new GoPayMerchant();
   const result = await merchant.getHistory({ days: 1, size: 20 });
@@ -681,10 +858,10 @@ token dan merchant ID agar tidak perlu login ulang setiap saat.
   //   size  {number} — jumlah transaksi maks (default: 50)
 
 ───────────────────────────────────────────────────────────
-3. INISIALISASI DENGAN TOKEN & MERCHANT ID MANUAL
+5. INISIALISASI DENGAN TOKEN & MERCHANT ID MANUAL
 ───────────────────────────────────────────────────────────
 
-  import GoPayMerchant from './gopay.js';
+  import GoPayMerchant from './gobiz.js';
 
   const merchant = new GoPayMerchant({
     token: 'eyJhbGci...',     // opsional, jika sudah punya access token
@@ -695,10 +872,10 @@ token dan merchant ID agar tidak perlu login ulang setiap saat.
   // saat memanggil method apapun (login & deteksi merchant otomatis).
 
 ───────────────────────────────────────────────────────────
-4. RESET WATCHER
+6. RESET WATCHER
 ───────────────────────────────────────────────────────────
 
-  import { getGoPayWatcher } from './gopay.js';
+  import { getGoPayWatcher } from './gobiz.js';
 
   const watcher = getGoPayWatcher();
   watcher.reset();
@@ -707,4 +884,3 @@ token dan merchant ID agar tidak perlu login ulang setiap saat.
 
 ═══════════════════════════════════════════════════════════
 */
-

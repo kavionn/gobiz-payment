@@ -18,7 +18,7 @@ Modul Node.js untuk berinteraksi dengan API GoBiz (GoPay Merchant) — memungkin
 
 ## Fitur Utama
 
-- 🔐 **Autentikasi Otomatis** — Login menggunakan email & password, token disimpan dan diperbarui otomatis
+- 🔐 **Autentikasi Otomatis** — Login menggunakan nomor HP (OTP) atau email & password, token disimpan dan diperbarui otomatis
 - 🏪 **Deteksi Merchant ID** — Merchant ID dideteksi secara otomatis dari akun yang login
 - 📋 **Riwayat Transaksi** — Ambil transaksi dari Analytics API maupun Journal API dengan fallback otomatis
 - 👁️ **Pemantauan Pembayaran** — Pantau transaksi masuk secara real-time dengan polling interval
@@ -39,29 +39,20 @@ npm install
 
 ---
 
-## Cara Mengatur Password Akun GoBiz
+## Cara Login (OTP vs Password)
 
-Modul ini memerlukan **email & password** untuk login ke API GoBiz. Jika kamu belum memiliki password (atau belum pernah mengaturnya), ikuti langkah berikut:
+Modul ini mendukung dua metode login: **Login via Nomor HP + OTP** dan **Login via Email + Password**.
 
-1. **Buka portal GoFood Merchant**
-   Kunjungi → [https://portal.gofoodmerchant.co.id](https://portal.gofoodmerchant.co.id)
+### 1. Login via Nomor HP + OTP 
+1. Otp Akan Di kirim Ke nomor yang ada di .env
+2. Masukan OTP yang di terima
+3. Login Selesai (Token Akan di simpan otomatis di .gopay_cache.json)
 
-2. **Login menggunakan OTP**
-   Masukkan nomor HP yang terdaftar, lalu masukkan kode OTP yang dikirim via SMS.
-
-3. **Buka halaman Profile**
-   Setelah berhasil login, pergi ke:
-   [https://portal.gofoodmerchant.co.id/account/profile](https://portal.gofoodmerchant.co.id/account/profile)
-
-4. **Atur password login**
-   Di halaman profile, cari opsi untuk mengatur atau mengubah **password login**, lalu simpan.
-
-5. **Gunakan kredensial di `.env`**
-   Setelah password berhasil diatur, gunakan email & password tersebut di file `.env`:
-   ```env
-   GOPAY_EMAIL=email@merchant.com
-   GOPAY_PASSWORD=password_yang_baru_diatur
-   ```
+### 2. Login via Email & Password
+1. Buka [https://portal.gofoodmerchant.co.id/account/profile](https://portal.gofoodmerchant.co.id/account/profile)
+2. Login menggunakan OTP.
+3. Di halaman profile, cari opsi untuk mengubah **password login**, lalu simpan.
+4. Gunakan email & password tersebut di file `.env`.
 
 ---
 
@@ -69,12 +60,23 @@ Modul ini memerlukan **email & password** untuk login ke API GoBiz. Jika kamu be
 
 ### File `.env`
 
-Buat file `.env` di direktori yang **sama** dengan `gobiz.js` dan isi dengan kredensial akun GoBiz Merchant:
+Buat file `.env` di direktori yang **sama** dengan `gobiz.js` dan tentukan metode login serta konfigurasi lainnya.
+Tersedia dua cara mengatur login (Pilih salah satu):
 
+**Opsi A: Menggunakan Nomor HP + OTP**
+```env
+GOPAY_LOGIN_METHOD=otp
+GOPAY_PHONE=08123456789
+```
+
+**Opsi B: Menggunakan Email + Password**
 ```env
 GOPAY_EMAIL=email@merchant.com
 GOPAY_PASSWORD=password_kamu
+```
 
+**Konfigurasi Tambahan (Demo & Testing):**
+```env
 # Diperlukan jika menggunakan demo.js
 # String QRIS statis dari akun GoPay Merchant kamu (bisa di-scan dari gambar QRIS)
 QRIS_STRING=00020101021226...
@@ -215,22 +217,31 @@ if (result.status) {
 
 ---
 
-### 3. Inisialisasi Manual dengan Token & Merchant ID
+### 3. Inisialisasi Kustom & OTP Callback Terprogram
 
-Jika kamu sudah memiliki access token dan merchant ID, bisa langsung diisi tanpa proses login:
+Selain melalui `.env`, Anda bisa memberikan kredensial atau token secara langsung. Untuk login OTP, Anda juga bisa menyediakan fungsi callback untuk mengambil OTP dari sumber lain (misalnya Telegram/Database) alih-alih terminal.
 
 ```js
 import GoPayMerchant from './gobiz.js';
 
 const merchant = new GoPayMerchant({
-  token: 'eyJhbGci...',     // opsional
-  merchantId: 'M-XXXXXXXX' // opsional
+  // Opsi A: Bypass login dengan token & merchant ID yang sudah ada
+  token: 'eyJhbGci...',     
+  merchantId: 'M-XXXXXXXX', 
+  
+  // Opsi B: Login OTP dengan custom callback
+  loginMethod: 'otp',
+  phone: '08123456789',
+  otpCallback: async (phoneNumber) => {
+     console.log(`Mengambil OTP dari sistem eksternal untuk ${phoneNumber}...`);
+     return "123456"; // kembalikan string OTP
+  }
 });
 
-const result = await merchant.getHistory({ days: 7, size: 100 });
+const result = await merchant.getHistory({ days: 1, size: 20 });
 ```
 
-> Jika `token` atau `merchantId` tidak diisi, keduanya akan di-resolve otomatis saat method pertama dipanggil.
+> Jika opsi autentikasi tidak diisi di constructor, modul akan otomatis membacanya dari `.env`.
 
 ---
 
@@ -310,7 +321,7 @@ Kelas utama untuk berinteraksi dengan API GoBiz Merchant.
 
 | Method                                    | Keterangan                                                          |
 |-------------------------------------------|---------------------------------------------------------------------|
-| `constructor(options?)`                   | `options.token` dan `options.merchantId` bersifat opsional          |
+| `constructor(options?)`                   | `options` (opsional): `token`, `merchantId`, `loginMethod`, `phone`, `otpCallback` |
 | `async init()`                            | Inisialisasi: validasi/refresh token & resolve merchant ID          |
 | `async getHistory({ days, size })`        | Ambil riwayat transaksi (fallback Analytics → Journal)              |
 | `async getTransactionsAnalytics({ ... })` | Ambil transaksi dari Analytics API secara langsung                  |
@@ -368,7 +379,7 @@ flowchart TD
     B -- Tidak --> C{Ada di\n.gopay_cache.json?}
     B -- Ya --> F
 
-    C -- Tidak --> E[Login otomatis\nbaca .env →\nGOPAY_EMAIL\nGOPAY_PASSWORD]
+    C -- Tidak --> E[Login via OTP/Password\nbaca metode dari .env]
     C -- Ya --> D[Muat token\ndari cache]
 
     D --> F{Validasi token\nke API}
